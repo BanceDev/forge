@@ -1,7 +1,10 @@
-use crate::util::{self, yn_prompt};
+use crate::util::{TEMP_CONFIG_PATH, create_config, dir_size, get_editor, is_root, open_in_editor, yn_prompt};
 use git2::Repository;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+const BASE_REPO_PATH: &str = "/var/db/forge";
+const BASE_CONFIG_PATH: &str = "/etc/forge/packages";
 
 pub enum Action {
     Add { url: String },
@@ -63,7 +66,7 @@ impl Action {
             Action::Upgrade { packages } => Ok(upgrade(packages)),
             Action::Autoremove => Ok(autoremove()),
             Action::Remove { packages } => remove(packages),
-            Action::List => Ok(list()),
+            Action::List => list(),
             Action::Search { term } => Ok(search(term)),
             Action::Clean { packages } => Ok(clean(packages)),
             Action::Show { package } => Ok(show(package)),
@@ -72,18 +75,47 @@ impl Action {
 }
 
 fn add(url: &str) -> Result<(), String> {
-    let base_path = "/var/lib/forge";
+    if !is_root() {
+        return Err("add must be run as root".to_string());
+    }
+
     let repo_name = {
         let last_segment = url.rsplit('/').next().unwrap_or(url);
         last_segment.strip_suffix(".git").unwrap_or(last_segment)
     };
-    let clone_path = PathBuf::from(base_path).join(repo_name);
-    let repo = Repository::clone(url, &clone_path)
-        .map_err(|e| format!("failed to clone {}: {}", repo_name, e))?;
+    let config_name = format!("{repo_name}.toml");
+
     println!(
-        "new package initialized at: {}",
+        "Creating config: {}",
+        config_name
+    );
+    create_config(repo_name)?;
+
+    let editor = get_editor();
+    let config_temp = format!("{}/{}", TEMP_CONFIG_PATH, config_name);
+    open_in_editor(&editor, &config_temp)?;
+
+    let clone_path = PathBuf::from(BASE_REPO_PATH).join(repo_name);
+    let repo = Repository::clone(url, &clone_path).map_err(|e| {
+        format!("failed to clone {}: {}", repo_name, e)
+    })?;
+
+    let mut config_path = PathBuf::from(BASE_CONFIG_PATH);
+    if !config_path.exists() {
+        fs::create_dir_all(&config_path).map_err(|e| {
+            format!("failed to create config directory: {}", e)
+        })?;
+    }
+
+    config_path.push(config_name);
+
+    fs::rename(config_temp, config_path).map_err(|e| format!("failed to place config in system directory: {}", e))?;
+
+    println!(
+        "New package initialized at: {}",
         repo.path().to_str().unwrap()
     );
+
     Ok(())
 }
 
@@ -102,33 +134,37 @@ fn autoremove() {
 }
 
 fn remove(packages: Vec<String>) -> Result<(), String> {
-    let base_path = "/var/lib/forge";
-    println!("checking dependencies...\n");
-    let package_paths: Vec<(String, PathBuf)> = packages
+    if !is_root() {
+        return Err("remove must be run as root".to_string());
+    }
+
+    println!("Checking dependencies...\n");
+    let package_paths: Vec<(String, PathBuf, PathBuf)> = packages
         .into_iter()
         .map(|p| {
-            let path = PathBuf::from(base_path).join(&p);
-            if !path.exists() {
+            let path = PathBuf::from(BASE_REPO_PATH).join(&p);
+            let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", p));
+            if !path.exists() || !cfg_path.exists() {
                 Err(format!("no installed package: {}", p))
             } else {
-                Ok((p, path))
+                Ok((p, path, cfg_path))
             }
         })
-        .collect::<Result<_, _>>()?; // propagates the first error
+        .collect::<Result<_, _>>()?;
 
     println!(
         "Packages to remove ({}): {}\n",
         package_paths.len(),
         package_paths
             .iter()
-            .map(|(p, _)| p.as_str())
+            .map(|(p, _, _)| p.as_str())
             .collect::<Vec<_>>()
             .join(", ")
     );
 
     let total_size: u64 = package_paths
         .iter()
-        .map(|(_, path)| util::dir_size(path).unwrap_or(0))
+        .map(|(_, path, _)| dir_size(path).unwrap_or(0))
         .sum();
 
     println!(
@@ -137,8 +173,13 @@ fn remove(packages: Vec<String>) -> Result<(), String> {
     );
 
     if yn_prompt("Proceed with removal?") {
-        for (name, path) in package_paths {
-            fs::remove_dir_all(&path).map_err(|e| format!("failed to remove {}: {}", name, e))?;
+        for (name, path, cfg_path) in package_paths {
+            fs::remove_dir_all(&path).map_err(|e| {
+                format!("failed to remove {}: {}", name, e)
+            })?;
+            fs::remove_file(&cfg_path).map_err(|e| {
+                format!("failed to remove {}: {}", name, e)
+            })?;
             println!("Removed {}", name);
         }
     }
@@ -146,8 +187,19 @@ fn remove(packages: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn list() {
-    println!("listing");
+fn list() -> Result<(), String> {
+    let config_path = Path::new(BASE_CONFIG_PATH);
+    for entry in fs::read_dir(config_path)
+        .map_err(|e| format!("failed to iterate package directory: {}", e))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(stem) = path.file_stem() {
+                println!("{}", stem.to_string_lossy());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn search(term: String) {

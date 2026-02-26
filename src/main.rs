@@ -1,10 +1,12 @@
 use action::Action;
-use std::env;
+use std::{env, fs};
+
+use crate::util::TEMP_CONFIG_PATH;
 
 mod action;
 mod util;
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let args: Vec<String> = env::args().collect();
 
     match Action::parse(&args) {
@@ -15,5 +17,6 @@ fn main() -> std::io::Result<()> {
         }
         Err(e) => eprintln!("forge: {}", e),
     }
-    Ok(())
+    // eat the error because end user doesn't care about cleanup
+    let _ = fs::remove_dir_all(TEMP_CONFIG_PATH);
 }

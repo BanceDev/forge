@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 git2 = "0.20.4"
+libc = "0.2.182"

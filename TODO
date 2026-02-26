@@ -1,0 +1,9 @@
+Add config command to set forge's values like the editor
+Implement update
+Implement upgrade
+Implement Autoremove
+Implement List
+Implement Search
+Implement Clean
+Implement Show
+Make remove drop the config as well
