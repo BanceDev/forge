@@ -1,5 +1,5 @@
 use crate::config::{self, ConfigCommand, TEMP_CONFIG_PATH, create_config};
-use crate::util::{dir_size, get_editor, is_root, open_in_editor, yn_prompt};
+use crate::util::{dir_size, get_editor, open_in_editor, yn_prompt};
 use git2::Repository;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ impl Action {
 }
 
 fn add(url: &str) -> Result<(), String> {
-    if !is_root() {
+    if !nix::unistd::geteuid().is_root() {
         return Err("add must be run as root".to_string());
     }
 
@@ -138,7 +138,7 @@ fn autoremove() {
 }
 
 fn remove(packages: Vec<String>) -> Result<(), String> {
-    if !is_root() {
+    if !nix::unistd::geteuid().is_root() {
         return Err("remove must be run as root".to_string());
     }
 

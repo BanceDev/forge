@@ -1,3 +1,5 @@
+Make a forge user and make it own relevant paths
+
 Add config command to set forge's values like the editor
 Implement update
 Implement upgrade
