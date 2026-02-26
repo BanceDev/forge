@@ -4,6 +4,7 @@ use std::{env, fs};
 use crate::util::TEMP_CONFIG_PATH;
 
 mod action;
+mod config;
 mod util;
 
 fn main() {

@@ -1,3 +1,4 @@
+use libc;
 use std::env;
 use std::fs;
 use std::io;
@@ -5,7 +6,6 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use libc;
 
 pub const TEMP_CONFIG_PATH: &str = "/var/lib/forge/.tmp";
 
@@ -14,9 +14,8 @@ pub fn create_config(package: &str) -> Result<(), String> {
     let mut path = PathBuf::from(TEMP_CONFIG_PATH);
 
     if !path.exists() {
-        fs::create_dir_all(&path).map_err(|e| {
-            format!("failed to create temp config directory: {}", e)
-        })?;
+        fs::create_dir_all(&path)
+            .map_err(|e| format!("failed to create temp config directory: {}", e))?;
     }
 
     path.push(filename);
@@ -25,14 +24,12 @@ pub fn create_config(package: &str) -> Result<(), String> {
         r#"# {package} configuration
 update = "tagged" # no | live | tagged
 build = "make"
-dependencies = []
 install = "make install"
+dependencies = []
     "#
     );
 
-    fs::write(path, template).map_err(|e| {
-        format!("failed to create config: {}", e)
-    })?;
+    fs::write(path, template).map_err(|e| format!("failed to create config: {}", e))?;
 
     Ok(())
 }
@@ -60,13 +57,14 @@ pub fn get_editor() -> String {
 }
 
 pub fn is_root() -> bool {
-    unsafe { libc::geteuid() == 0}
+    unsafe { libc::geteuid() == 0 }
 }
 
 pub fn open_in_editor(editor: &str, file: &str) -> Result<(), String> {
-    let status = Command::new(editor).arg(file).status().map_err(|e| {
-        format!("failed to execute editor: {}", e)
-    })?;
+    let status = Command::new(editor)
+        .arg(file)
+        .status()
+        .map_err(|e| format!("failed to execute editor: {}", e))?;
 
     if !status.success() {
         return Err(format!("editor exited with non-zero status: {}", status));
