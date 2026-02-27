@@ -2,7 +2,7 @@ use crate::config::{self, ConfigCommand, TEMP_CONFIG_PATH, create_config};
 use crate::util::{dir_size, get_editor, open_in_editor, yn_prompt};
 use git2::Repository;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const BASE_REPO_PATH: &str = "/var/db/forge";
 const BASE_CONFIG_PATH: &str = "/etc/forge/packages";
@@ -71,7 +71,7 @@ impl Action {
             Action::Remove { packages } => remove(packages),
             Action::List => list(),
             Action::Search { term } => Ok(search(term)),
-            Action::Clean { packages } => Ok(clean(packages)),
+            Action::Clean { packages } => clean(packages),
             Action::Show { package } => Ok(show(package)),
             Action::Version => Ok(version()),
         }
@@ -192,8 +192,7 @@ fn remove(packages: Vec<String>) -> Result<(), String> {
 }
 
 fn list() -> Result<(), String> {
-    let config_path = Path::new(BASE_CONFIG_PATH);
-    for entry in fs::read_dir(config_path)
+    for entry in fs::read_dir(BASE_CONFIG_PATH)
         .map_err(|e| format!("failed to iterate package directory: {}", e))?
     {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -211,10 +210,67 @@ fn search(term: String) {
     println!("searching: {}", term);
 }
 
-fn clean(packages: Vec<String>) {
-    for (_, p) in packages.iter().enumerate() {
-        println!("cleaning: {}", p);
+fn clean(packages: Vec<String>) -> Result<(), String> {
+    if !nix::unistd::geteuid().is_root() {
+        return Err("clean must be run as root".to_string());
     }
+
+    let package_paths: Vec<(String, PathBuf, PathBuf)> = if packages.is_empty() {
+        fs::read_dir(BASE_CONFIG_PATH)
+            .map_err(|e| format!("failed to iterate package directory: {}", e))?
+            .map(|p| {
+                let entry = p.map_err(|e| e.to_string())?;
+                let path = entry.path();
+
+                let pkgname = path
+                    .file_stem()
+                    .ok_or_else(|| format!("invalid filename: {:?}", path))?
+                    .to_string_lossy()
+                    .into_owned();
+
+                let path = PathBuf::from(BASE_REPO_PATH).join(&pkgname);
+                let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", &pkgname));
+
+                if !path.exists() || !cfg_path.exists() {
+                    Err(format!("no installed package: {}", pkgname))
+                } else {
+                    Ok((pkgname, path, cfg_path))
+                }
+            })
+            .collect::<Result<_, _>>()?
+    } else {
+        packages
+            .into_iter()
+            .map(|p| {
+                let path = PathBuf::from(BASE_REPO_PATH).join(&p);
+                let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", p));
+                if !path.exists() || !cfg_path.exists() {
+                    Err(format!("no installed package: {}", p))
+                } else {
+                    Ok((p, path, cfg_path))
+                }
+            })
+            .collect::<Result<_, _>>()?
+    };
+
+    println!(
+        "Packages to clean ({}): {}\n",
+        package_paths.len(),
+        package_paths
+            .iter()
+            .map(|(p, _, _)| p.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    if yn_prompt("Proceed with cleanup?") {
+        for (name, path, cfg_path) in package_paths {
+            config::run_config_command(&cfg_path, &path, ConfigCommand::Clean)?;
+            println!("Cleaned {}", name);
+        }
+    }
+
+    Ok(())
 }
 
 fn show(package: String) {

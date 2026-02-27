@@ -9,15 +9,26 @@ pub enum ConfigCommand {
     Build,
     Install,
     Uninstall,
+    PostInstall,
+    PostUninstall,
+    Clean,
 }
 
 #[derive(Deserialize)]
 pub struct Config {
     pub update: Option<String>,
+    pub dependencies: Option<Vec<String>>,
+    pub hooks: Option<Hooks>,
+}
+
+#[derive(Deserialize)]
+pub struct Hooks {
     pub build: Option<String>,
     pub install: Option<String>,
     pub uninstall: Option<String>,
-    pub dependencies: Option<Vec<String>>,
+    pub post_install: Option<String>,
+    pub post_uninstall: Option<String>,
+    pub clean: Option<String>,
 }
 
 impl Config {
@@ -48,10 +59,15 @@ pub fn create_config(package: &str) -> Result<(), String> {
     let template = format!(
         r#"# {package} configuration
 update = "tagged" # no | live | tagged
+dependencies = []
+
+[hooks]
 build = "make"
 install = "make install"
 uninstall = "make uninstall"
-dependencies = []
+post_install = ""
+post_uninstall = ""
+clean = "make clean"
     "#
     );
 
@@ -66,11 +82,15 @@ pub fn run_config_command(
     command: ConfigCommand,
 ) -> Result<(), String> {
     let config = Config::new(config_path).ok_or("config not found".to_string())?;
+    let hooks = config.hooks.ok_or("no hooks section".to_string())?;
 
     let cmd = match command {
-        ConfigCommand::Build => config.build,
-        ConfigCommand::Install => config.install,
-        ConfigCommand::Uninstall => config.uninstall,
+        ConfigCommand::Build => hooks.build,
+        ConfigCommand::Install => hooks.install,
+        ConfigCommand::Uninstall => hooks.uninstall,
+        ConfigCommand::PostInstall => hooks.post_install,
+        ConfigCommand::PostUninstall => hooks.post_uninstall,
+        ConfigCommand::Clean => hooks.clean,
     };
 
     if let Some(c) = cmd {
