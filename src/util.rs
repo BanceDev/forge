@@ -27,26 +27,6 @@ pub fn get_editor() -> String {
         .unwrap_or_else(|_| "nano".to_string())
 }
 
-pub fn get_invoking_user_env() -> Option<(u32, u32, String, String)> {
-    let username = std::env::var("SUDO_USER").ok()?;
-    if username.is_empty() {
-        return None;
-    }
-
-    let user = nix::unistd::User::from_name(&username).ok()??;
-    let uid = user.uid.as_raw();
-    let gid = user.gid.as_raw();
-    let home = user.dir.to_string_lossy().to_string();
-
-    // Reconstruct a sane PATH for the user including common tool locations
-    let path = format!(
-        "{home}/.cargo/bin:{home}/.local/bin:/usr/local/bin:/usr/bin:/bin",
-        home = home
-    );
-
-    Some((uid, gid, home, path))
-}
-
 pub fn open_in_editor(editor: &str, file: &str) -> Result<(), String> {
     let status = Command::new(editor)
         .arg(file)

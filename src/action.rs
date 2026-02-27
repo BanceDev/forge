@@ -17,6 +17,7 @@ pub enum Action {
     Search { term: String },
     Clean { packages: Vec<String> },
     Show { package: String },
+    Version,
 }
 
 impl Action {
@@ -56,6 +57,7 @@ impl Action {
                 let package = args.get(2).ok_or("show requires <package>")?.clone();
                 Ok(Action::Show { package })
             }
+            "--version" => Ok(Action::Version),
             _ => Err(format!("unknown command {}", cmd)),
         }
     }
@@ -71,6 +73,7 @@ impl Action {
             Action::Search { term } => Ok(search(term)),
             Action::Clean { packages } => Ok(clean(packages)),
             Action::Show { package } => Ok(show(package)),
+            Action::Version => Ok(version()),
         }
     }
 }
@@ -216,4 +219,17 @@ fn clean(packages: Vec<String>) {
 
 fn show(package: String) {
     println!("showing {}", package);
+}
+
+fn version() {
+    println!(
+        r#"
+.-------..___    Forge v{}
+'-._     :_.-'   Copyright (C) 2026 Lance Borden
+    ) _ (
+   '-' '-'       This program is free software
+                 under the MIT license.
+    "#,
+        env!("CARGO_PKG_VERSION")
+    );
 }
