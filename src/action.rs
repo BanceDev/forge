@@ -7,7 +7,6 @@ use std::path::PathBuf;
 pub enum Action {
     Add { url: String },
     Update,
-    Upgrade { packages: Vec<String> },
     Remove { packages: Vec<String> },
     List,
     Search { term: String },
@@ -26,10 +25,6 @@ impl Action {
                 Ok(Action::Add { url })
             }
             "update" => Ok(Action::Update),
-            "upgrade" => {
-                let packages = args[2..].to_vec();
-                Ok(Action::Upgrade { packages })
-            }
             "remove" => {
                 let packages = args[2..].to_vec();
 
@@ -61,7 +56,6 @@ impl Action {
         match self {
             Action::Add { url } => add(url.as_str()),
             Action::Update => update(),
-            Action::Upgrade { packages } => upgrade(packages),
             Action::Remove { packages } => remove(packages),
             Action::List => list(),
             Action::Search { term } => Ok(search(term)),
@@ -127,33 +121,17 @@ fn update() -> Result<(), String> {
     }
 
     let package_paths = util::collect_packages()?;
-    util::print_collected_packages(&package_paths, "Packages to update");
 
-    if util::yn_prompt("Proceed with update?") {
-        for (name, path, _) in package_paths {
-            util::pull_repo(&path).map_err(|e| format!("failed to update repo: {e}"))?;
-            println!("{} up to date.", name);
+    let mut update_pkgs: PackageList = vec![];
+    for (name, path, config_path) in package_paths {
+        if util::pull_repo(&path).map_err(|e| format!("failed to update repo: {e}"))? {
+            update_pkgs.push((name, path, config_path));
         }
     }
 
-    Ok(())
-}
-
-fn upgrade(packages: Vec<String>) -> Result<(), String> {
-    if !nix::unistd::geteuid().is_root() {
-        return Err("upgrade must be run as root".to_string());
-    }
-
-    let package_paths: PackageList = if packages.is_empty() {
-        util::collect_packages()?
-    } else {
-        util::collect_named_packages(packages)?
-    };
-
-    util::print_collected_packages(&package_paths, "Packages to upgrade");
-
-    if util::yn_prompt("Proceed with upgrade?") {
-        for (name, path, cfg_path) in package_paths {
+    util::print_collected_packages(&update_pkgs, "Packages to update");
+    if util::yn_prompt("Proceed with update?") {
+        for (name, path, cfg_path) in update_pkgs {
             config::run_config_command(&cfg_path, &path, ConfigCommand::Build)?;
             config::run_config_command(&cfg_path, &path, ConfigCommand::Install)?;
             println!("Upgraded {}", name);

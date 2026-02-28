@@ -110,7 +110,7 @@ pub fn print_collected_packages(packages: &PackageList, message: &str) {
     );
 }
 
-pub fn pull_repo(path: &Path) -> Result<(), git2::Error> {
+pub fn pull_repo(path: &Path) -> Result<bool, git2::Error> {
     let repo = Repository::open(path)?;
 
     let head = repo.head()?;
@@ -135,20 +135,18 @@ pub fn pull_repo(path: &Path) -> Result<(), git2::Error> {
     let (analysis, _pref) = repo.merge_analysis(&[&fetch_commit])?;
 
     if analysis.is_fast_forward() {
-        println!("Fast-forwarding...");
-
         let refname = format!("refs/heads/{}", branch);
         let mut reference = repo.find_reference(&refname)?;
         reference.set_target(fetch_commit.id(), "Fast-Forward")?;
         repo.set_head(&refname)?;
         repo.checkout_head(Some(CheckoutBuilder::default().force()))?;
+        Ok(true)
     } else if analysis.is_up_to_date() {
-        println!("Already up to date.");
+        Ok(false)
     } else {
         println!("Non fast-forward merge required (manual merge needed).");
+        Ok(false)
     }
-
-    Ok(())
 }
 
 pub fn yn_prompt(prompt: &str) -> bool {
