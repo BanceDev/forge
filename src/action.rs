@@ -1,11 +1,8 @@
-use crate::config::{self, Config, ConfigCommand, TEMP_CONFIG_PATH, create_config};
-use crate::util::{dir_size, get_editor, open_in_editor, pull_repo, yn_prompt};
+use crate::config::{self, Config, ConfigCommand, TEMP_CONFIG_PATH};
+use crate::util::{self, BASE_CONFIG_PATH, BASE_REPO_PATH, PackageList};
 use git2::Repository;
 use std::fs;
 use std::path::PathBuf;
-
-const BASE_REPO_PATH: &str = "/var/db/forge";
-const BASE_CONFIG_PATH: &str = "/etc/forge/packages";
 
 pub enum Action {
     Add { url: String },
@@ -87,11 +84,11 @@ fn add(url: &str) -> Result<(), String> {
     let config_name = format!("{repo_name}.toml");
 
     println!("Creating config: {}", config_name);
-    create_config(repo_name)?;
+    config::create_config(repo_name)?;
 
-    let editor = get_editor();
+    let editor = util::get_editor();
     let config_temp = format!("{}/{}", TEMP_CONFIG_PATH, config_name);
-    open_in_editor(&editor, &config_temp)?;
+    util::open_in_editor(&editor, &config_temp)?;
 
     let clone_path = PathBuf::from(BASE_REPO_PATH).join(repo_name);
     let repo = Repository::clone(url, &clone_path)
@@ -113,7 +110,7 @@ fn add(url: &str) -> Result<(), String> {
         repo.path().to_str().unwrap()
     );
 
-    if yn_prompt("Run build and install commands?") {
+    if util::yn_prompt("Run build and install commands?") {
         println!("Building...");
         config::run_config_command(&config_path, &clone_path, ConfigCommand::Build)?;
         println!("Installing...");
@@ -128,41 +125,12 @@ fn update() -> Result<(), String> {
         return Err("update must be run as root".to_string());
     }
 
-    let package_paths: Vec<(String, PathBuf)> = fs::read_dir(BASE_CONFIG_PATH)
-        .map_err(|e| format!("failed to iterate package directory: {}", e))?
-        .map(|p| {
-            let entry = p.map_err(|e| e.to_string())?;
-            let path = entry.path();
+    let package_paths = util::collect_packages()?;
+    util::print_collected_packages(&package_paths, "Packages to update");
 
-            let pkgname = path
-                .file_stem()
-                .ok_or_else(|| format!("invalid filename: {:?}", path))?
-                .to_string_lossy()
-                .into_owned();
-
-            let path = PathBuf::from(BASE_REPO_PATH).join(&pkgname);
-
-            if !path.exists() {
-                Err(format!("no installed package: {}", pkgname))
-            } else {
-                Ok((pkgname, path))
-            }
-        })
-        .collect::<Result<_, _>>()?;
-
-    println!(
-        "Packages to update ({}): {}\n",
-        package_paths.len(),
-        package_paths
-            .iter()
-            .map(|(p, _)| p.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    if yn_prompt("Proceed with update?") {
-        for (name, path) in package_paths {
-            pull_repo(&path).map_err(|e| format!("failed to update repo: {e}"))?;
+    if util::yn_prompt("Proceed with update?") {
+        for (name, path, _) in package_paths {
+            util::pull_repo(&path).map_err(|e| format!("failed to update repo: {e}"))?;
             println!("{} up to date.", name);
         }
     }
@@ -172,58 +140,18 @@ fn update() -> Result<(), String> {
 
 fn upgrade(packages: Vec<String>) -> Result<(), String> {
     if !nix::unistd::geteuid().is_root() {
-        return Err("clean must be run as root".to_string());
+        return Err("upgrade must be run as root".to_string());
     }
 
-    let package_paths: Vec<(String, PathBuf, PathBuf)> = if packages.is_empty() {
-        fs::read_dir(BASE_CONFIG_PATH)
-            .map_err(|e| format!("failed to iterate package directory: {}", e))?
-            .map(|p| {
-                let entry = p.map_err(|e| e.to_string())?;
-                let path = entry.path();
-
-                let pkgname = path
-                    .file_stem()
-                    .ok_or_else(|| format!("invalid filename: {:?}", path))?
-                    .to_string_lossy()
-                    .into_owned();
-
-                let path = PathBuf::from(BASE_REPO_PATH).join(&pkgname);
-                let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", &pkgname));
-
-                if !path.exists() || !cfg_path.exists() {
-                    Err(format!("no installed package: {}", pkgname))
-                } else {
-                    Ok((pkgname, path, cfg_path))
-                }
-            })
-            .collect::<Result<_, _>>()?
+    let package_paths: PackageList = if packages.is_empty() {
+        util::collect_packages()?
     } else {
-        packages
-            .into_iter()
-            .map(|p| {
-                let path = PathBuf::from(BASE_REPO_PATH).join(&p);
-                let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", p));
-                if !path.exists() || !cfg_path.exists() {
-                    Err(format!("no installed package: {}", p))
-                } else {
-                    Ok((p, path, cfg_path))
-                }
-            })
-            .collect::<Result<_, _>>()?
+        util::collect_named_packages(packages)?
     };
 
-    println!(
-        "Packages to upgrade ({}): {}\n",
-        package_paths.len(),
-        package_paths
-            .iter()
-            .map(|(p, _, _)| p.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    util::print_collected_packages(&package_paths, "Packages to upgrade");
 
-    if yn_prompt("Proceed with upgrade?") {
+    if util::yn_prompt("Proceed with upgrade?") {
         for (name, path, cfg_path) in package_paths {
             config::run_config_command(&cfg_path, &path, ConfigCommand::Build)?;
             config::run_config_command(&cfg_path, &path, ConfigCommand::Install)?;
@@ -240,32 +168,13 @@ fn remove(packages: Vec<String>) -> Result<(), String> {
     }
 
     println!("Checking dependencies...\n");
-    let package_paths: Vec<(String, PathBuf, PathBuf)> = packages
-        .into_iter()
-        .map(|p| {
-            let path = PathBuf::from(BASE_REPO_PATH).join(&p);
-            let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", p));
-            if !path.exists() || !cfg_path.exists() {
-                Err(format!("no installed package: {}", p))
-            } else {
-                Ok((p, path, cfg_path))
-            }
-        })
-        .collect::<Result<_, _>>()?;
+    let package_paths: PackageList = util::collect_named_packages(packages)?;
 
-    println!(
-        "Packages to remove ({}): {}\n",
-        package_paths.len(),
-        package_paths
-            .iter()
-            .map(|(p, _, _)| p.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    util::print_collected_packages(&package_paths, "Packages to remove");
 
     let total_size: u64 = package_paths
         .iter()
-        .map(|(_, path, _)| dir_size(path).unwrap_or(0))
+        .map(|(_, path, _)| util::dir_size(path).unwrap_or(0))
         .sum();
 
     println!(
@@ -273,7 +182,7 @@ fn remove(packages: Vec<String>) -> Result<(), String> {
         total_size as f64 / (1024.0 * 1024.0)
     );
 
-    if yn_prompt("Proceed with removal?") {
+    if util::yn_prompt("Proceed with removal?") {
         for (name, path, cfg_path) in package_paths {
             config::run_config_command(&cfg_path, &path, ConfigCommand::Uninstall)?;
             fs::remove_dir_all(&path).map_err(|e| format!("failed to remove {}: {}", name, e))?;
@@ -309,55 +218,15 @@ fn clean(packages: Vec<String>) -> Result<(), String> {
         return Err("clean must be run as root".to_string());
     }
 
-    let package_paths: Vec<(String, PathBuf, PathBuf)> = if packages.is_empty() {
-        fs::read_dir(BASE_CONFIG_PATH)
-            .map_err(|e| format!("failed to iterate package directory: {}", e))?
-            .map(|p| {
-                let entry = p.map_err(|e| e.to_string())?;
-                let path = entry.path();
-
-                let pkgname = path
-                    .file_stem()
-                    .ok_or_else(|| format!("invalid filename: {:?}", path))?
-                    .to_string_lossy()
-                    .into_owned();
-
-                let path = PathBuf::from(BASE_REPO_PATH).join(&pkgname);
-                let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", &pkgname));
-
-                if !path.exists() || !cfg_path.exists() {
-                    Err(format!("no installed package: {}", pkgname))
-                } else {
-                    Ok((pkgname, path, cfg_path))
-                }
-            })
-            .collect::<Result<_, _>>()?
+    let package_paths: PackageList = if packages.is_empty() {
+        util::collect_packages()?
     } else {
-        packages
-            .into_iter()
-            .map(|p| {
-                let path = PathBuf::from(BASE_REPO_PATH).join(&p);
-                let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", p));
-                if !path.exists() || !cfg_path.exists() {
-                    Err(format!("no installed package: {}", p))
-                } else {
-                    Ok((p, path, cfg_path))
-                }
-            })
-            .collect::<Result<_, _>>()?
+        util::collect_named_packages(packages)?
     };
 
-    println!(
-        "Packages to clean ({}): {}\n",
-        package_paths.len(),
-        package_paths
-            .iter()
-            .map(|(p, _, _)| p.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    util::print_collected_packages(&package_paths, "Packages to clean");
 
-    if yn_prompt("Proceed with cleanup?") {
+    if util::yn_prompt("Proceed with cleanup?") {
         for (name, path, cfg_path) in package_paths {
             config::run_config_command(&cfg_path, &path, ConfigCommand::Clean)?;
             println!("Cleaned {}", name);

@@ -4,7 +4,56 @@ use std::fs;
 use std::io;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
+
+pub const BASE_REPO_PATH: &str = "/var/db/forge";
+pub const BASE_CONFIG_PATH: &str = "/etc/forge/packages";
+pub type PackageList = Vec<(String, PathBuf, PathBuf)>;
+
+pub fn collect_packages() -> Result<PackageList, String> {
+    let pkgs: PackageList = fs::read_dir(BASE_CONFIG_PATH)
+        .map_err(|e| format!("failed to iterate package directory: {}", e))?
+        .map(|p| {
+            let entry = p.map_err(|e| e.to_string())?;
+            let path = entry.path();
+
+            let pkgname = path
+                .file_stem()
+                .ok_or_else(|| format!("invalid filename: {:?}", path))?
+                .to_string_lossy()
+                .into_owned();
+
+            let path = PathBuf::from(BASE_REPO_PATH).join(&pkgname);
+            let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", &pkgname));
+
+            if !path.exists() || !cfg_path.exists() {
+                Err(format!("no installed package: {}", pkgname))
+            } else {
+                Ok((pkgname, path, cfg_path))
+            }
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(pkgs)
+}
+
+pub fn collect_named_packages(packages: Vec<String>) -> Result<PackageList, String> {
+    let pkgs: PackageList = packages
+        .into_iter()
+        .map(|p| {
+            let path = PathBuf::from(BASE_REPO_PATH).join(&p);
+            let cfg_path = PathBuf::from(BASE_CONFIG_PATH).join(format!("{}.toml", p));
+            if !path.exists() || !cfg_path.exists() {
+                Err(format!("no installed package: {}", p))
+            } else {
+                Ok((p, path, cfg_path))
+            }
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(pkgs)
+}
 
 pub fn dir_size(path: &Path) -> std::io::Result<u64> {
     let mut size = 0;
@@ -39,6 +88,18 @@ pub fn open_in_editor(editor: &str, file: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn print_collected_packages(packages: &PackageList, message: &str) {
+    println!(
+        "{message} ({}): {}\n",
+        packages.len(),
+        packages
+            .iter()
+            .map(|(p, _, _)| p.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 pub fn pull_repo(path: &Path) -> Result<(), git2::Error> {
