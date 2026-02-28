@@ -1,5 +1,5 @@
 use crate::config::{self, ConfigCommand, TEMP_CONFIG_PATH, create_config};
-use crate::util::{dir_size, get_editor, open_in_editor, yn_prompt};
+use crate::util::{dir_size, get_editor, open_in_editor, pull_repo, yn_prompt};
 use git2::Repository;
 use std::fs;
 use std::path::PathBuf;
@@ -65,7 +65,7 @@ impl Action {
     pub fn execute(self) -> Result<(), String> {
         match self {
             Action::Add { url } => add(url.as_str()),
-            Action::Update => Ok(update()),
+            Action::Update => update(),
             Action::Upgrade { packages } => Ok(upgrade(packages)),
             Action::Autoremove => Ok(autoremove()),
             Action::Remove { packages } => remove(packages),
@@ -126,8 +126,51 @@ fn add(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn update() {
-    println!("updating");
+fn update() -> Result<(), String> {
+    if !nix::unistd::geteuid().is_root() {
+        return Err("update must be run as root".to_string());
+    }
+
+    let package_paths: Vec<(String, PathBuf)> = fs::read_dir(BASE_CONFIG_PATH)
+        .map_err(|e| format!("failed to iterate package directory: {}", e))?
+        .map(|p| {
+            let entry = p.map_err(|e| e.to_string())?;
+            let path = entry.path();
+
+            let pkgname = path
+                .file_stem()
+                .ok_or_else(|| format!("invalid filename: {:?}", path))?
+                .to_string_lossy()
+                .into_owned();
+
+            let path = PathBuf::from(BASE_REPO_PATH).join(&pkgname);
+
+            if !path.exists() {
+                Err(format!("no installed package: {}", pkgname))
+            } else {
+                Ok((pkgname, path))
+            }
+        })
+        .collect::<Result<_, _>>()?;
+
+    println!(
+        "Packages to update ({}): {}\n",
+        package_paths.len(),
+        package_paths
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    if yn_prompt("Proceed with update?") {
+        for (name, path) in package_paths {
+            pull_repo(&path).map_err(|e| format!("failed to update repo: {e}"))?;
+            println!("Updated {}", name);
+        }
+    }
+
+    Ok(())
 }
 
 fn upgrade(packages: Vec<String>) {

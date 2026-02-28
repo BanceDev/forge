@@ -1,3 +1,4 @@
+use git2::{Cred, FetchOptions, RemoteCallbacks, Repository, build::CheckoutBuilder};
 use std::env;
 use std::fs;
 use std::io;
@@ -35,6 +36,47 @@ pub fn open_in_editor(editor: &str, file: &str) -> Result<(), String> {
 
     if !status.success() {
         return Err(format!("editor exited with non-zero status: {}", status));
+    }
+
+    Ok(())
+}
+
+pub fn pull_repo(path: &Path) -> Result<(), git2::Error> {
+    let repo = Repository::open(path)?;
+
+    let head = repo.head()?;
+    let branch = head
+        .shorthand()
+        .ok_or_else(|| git2::Error::from_str("Could not determine current branch"))?;
+
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_url, username_from_url, _allowed| {
+        Cred::ssh_key_from_agent(username_from_url.unwrap())
+    });
+
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+
+    let mut remote = repo.find_remote("origin")?;
+    remote.fetch(&[branch], Some(&mut fetch_options), None)?;
+
+    let fetch_head = repo.find_reference("FETCH_HEAD")?;
+    let fetch_commit = repo.reference_to_annotated_commit(&fetch_head)?;
+
+    let (analysis, _pref) = repo.merge_analysis(&[&fetch_commit])?;
+
+    if analysis.is_fast_forward() {
+        println!("Fast-forwarding...");
+
+        let refname = format!("refs/heads/{}", branch);
+        let mut reference = repo.find_reference(&refname)?;
+        reference.set_target(fetch_commit.id(), "Fast-Forward")?;
+        repo.set_head(&refname)?;
+        repo.checkout_head(Some(CheckoutBuilder::default().force()))?;
+    } else if analysis.is_up_to_date() {
+        println!("Already up to date.");
+    } else {
+        println!("Non fast-forward merge required (manual merge needed).");
     }
 
     Ok(())
