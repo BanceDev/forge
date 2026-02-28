@@ -1,5 +1,4 @@
-branch in config
-hash in config
-Add config command to set forge's values like the editor
-Implement Search
-make helper function for collecting package info
+repo branch in config
+repo set hash
+tagged and none update modes
+lockfile for update tracking
