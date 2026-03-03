@@ -133,12 +133,6 @@ pub fn print_collected_packages(packages: &PackageList, message: &str) {
 pub fn pull_latest_tag(path: &Path) -> Result<(), git2::Error> {
     let repo = Repository::open(path)?;
 
-    let head = repo.head()?;
-    let branch = head
-        .shorthand()
-        .ok_or_else(|| git2::Error::from_str("Could not determine current branch"))?
-        .to_string();
-
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|_url, username_from_url, _allowed| {
         Cred::ssh_key_from_agent(username_from_url.unwrap())
@@ -151,15 +145,14 @@ pub fn pull_latest_tag(path: &Path) -> Result<(), git2::Error> {
     remote.fetch(&["refs/tags/*:refs/tags/*"], Some(&mut fetch_options), None)?;
 
     let tag_names = repo.tag_names(None)?;
-
     let mut latest_commit = None;
     let mut latest_time = 0;
 
     for name in tag_names.iter().flatten() {
         let obj = repo.revparse_single(&format!("refs/tags/{}", name))?;
         let commit = obj.peel_to_commit()?;
-
         let time = commit.time().seconds();
+
         if time > latest_time {
             latest_time = time;
             latest_commit = Some(commit);
@@ -168,21 +161,18 @@ pub fn pull_latest_tag(path: &Path) -> Result<(), git2::Error> {
 
     let latest_commit = latest_commit.ok_or_else(|| git2::Error::from_str("No tags found"))?;
 
-    let annotated = repo.find_annotated_commit(latest_commit.id())?;
-    let (analysis, _) = repo.merge_analysis(&[&annotated])?;
+    let current_commit = repo.head()?.peel_to_commit()?;
 
-    if analysis.is_fast_forward() {
-        let refname = format!("refs/heads/{}", branch);
-        let mut reference = repo.find_reference(&refname)?;
-        reference.set_target(latest_commit.id(), "set to latest tag")?;
-        repo.set_head_detached(latest_commit.id())?;
-        repo.checkout_head(Some(CheckoutBuilder::default().force()))?;
-    } else if !analysis.is_up_to_date() {
-        println!("Cannot fast-forward to latest tag.");
+    if current_commit.id() == latest_commit.id() {
+        return Ok(());
     }
+
+    repo.set_head_detached(latest_commit.id())?;
+    repo.checkout_head(Some(CheckoutBuilder::default().force()))?;
 
     Ok(())
 }
+
 pub fn pull_repo(path: &Path) -> Result<(), git2::Error> {
     let repo = Repository::open(path)?;
 
