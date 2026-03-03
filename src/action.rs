@@ -105,6 +105,15 @@ fn add(url: &str) -> Result<(), String> {
         repo.path().to_str().unwrap()
     );
 
+    // if configured for tag mode move the head to the tag before build
+    let config = Config::new(&config_path).ok_or("config not found".to_string())?;
+    if let Some(u) = config.update {
+        if u.as_str() == "tagged" {
+            util::pull_latest_tag(&clone_path)
+                .map_err(|e| format!("failed to update repo: {e}"))?;
+        }
+    }
+
     if util::yn_prompt("Run build and install commands?") {
         println!("Building...");
         config::run_config_command(&config_path, &clone_path, ConfigCommand::Build)?;
