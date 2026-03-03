@@ -174,8 +174,8 @@ pub fn pull_latest_tag(path: &Path) -> Result<(), git2::Error> {
     if analysis.is_fast_forward() {
         let refname = format!("refs/heads/{}", branch);
         let mut reference = repo.find_reference(&refname)?;
-        reference.set_target(latest_commit.id(), "Fast-Forward to latest tag")?;
-        repo.set_head(&refname)?;
+        reference.set_target(latest_commit.id(), "set to latest tag")?;
+        repo.set_head_detached(latest_commit.id())?;
         repo.checkout_head(Some(CheckoutBuilder::default().force()))?;
     } else if !analysis.is_up_to_date() {
         println!("Cannot fast-forward to latest tag.");
